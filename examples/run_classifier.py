@@ -25,6 +25,7 @@ import logging
 import argparse
 import random
 from tqdm import tqdm, trange
+import jsonlines
 
 import numpy as np
 import torch
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 class InputExample(object):
     """A single training/test example for simple sequence classification."""
 
-    def __init__(self, guid, text_a, text_b=None, label=None):
+    def __init__(self, guid, text_a, text_b=None, label=None, weight=None):
         """Constructs a InputExample.
 
         Args:
@@ -61,16 +62,18 @@ class InputExample(object):
         self.text_a = text_a
         self.text_b = text_b
         self.label = label
+        self.weight = weight
 
 
 class InputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, input_ids, input_mask, segment_ids, label_id):
+    def __init__(self, input_ids, input_mask, segment_ids, label_id, weight):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label_id = label_id
+        self.weight = weight
 
 
 class DataProcessor(object):
@@ -111,7 +114,7 @@ class MrpcProcessor(DataProcessor):
     def get_dev_examples(self, data_dir):
         """See base class."""
         return self._create_examples(
-            self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
+                self._read_tsv(os.path.join(data_dir, "test.tsv")), "dev")
 
     def get_labels(self):
         """See base class."""
@@ -160,9 +163,58 @@ class MnliProcessor(DataProcessor):
             text_a = line[8]
             text_b = line[9]
             label = line[-1]
+
+            if label == '-':
+                continue
+
             examples.append(
                 InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples
+
+class FeverProcessor(DataProcessor):
+
+    def _read_jsonlines(self, input_file):
+        lines = []
+        with open(input_file, "r", encoding='utf-8') as f:
+            reader = jsonlines.Reader(f)
+            for line in reader.iter(type=dict):
+                lines.append(line)
+
+        return lines
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_jsonlines(os.path.join(data_dir, "nli.train.jsonl")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_jsonlines(os.path.join(data_dir, "nli.dev.jsonl")), "dev")
+
+    def get_labels(self):
+        """See base class."""
+        return ["SUPPORTS", "REFUTES", "NOT ENOUGH INFO"]
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        target_labels = self.get_labels()
+        num_labels = len(target_labels)
+        for (i, line) in enumerate(lines):
+            guid = line['id']
+            text_a = line['claim']
+            text_b = line['evidence']
+            label = line['gold_label']
+            if 'weight' in line:
+                weight = line['weight']
+            else:
+                weight = 0.0
+
+            examples.append(
+                InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label, weight=weight))
+        return examples
+
 
 
 class ColaProcessor(DataProcessor):
@@ -201,6 +253,7 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
 
     features = []
     for (ex_index, example) in enumerate(examples):
+        weight = example.weight
         tokens_a = tokenizer.tokenize(example.text_a)
 
         tokens_b = None
@@ -272,7 +325,8 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
                 InputFeatures(input_ids=input_ids,
                               input_mask=input_mask,
                               segment_ids=segment_ids,
-                              label_id=label_id))
+                              label_id=label_id,
+                              weight=weight))
     return features
 
 
@@ -380,6 +434,11 @@ def main():
     parser.add_argument('--fp16',
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")
+    parser.add_argument('--output_preds',
+                        action='store_true',
+                        help="output the predictions of the dev set")
+    parser.add_argument("--weighted_loss", action='store_true',
+                        help="Use weights from the dataset for a per case weighted loss.")
     parser.add_argument('--loss_scale',
                         type=float, default=0,
                         help="Loss scaling to improve fp16 numeric stability. Only used when fp16 set to True.\n"
@@ -392,11 +451,13 @@ def main():
         "cola": ColaProcessor,
         "mnli": MnliProcessor,
         "mrpc": MrpcProcessor,
+        "fever": FeverProcessor,
     }
 
     num_labels_task = {
         "cola": 2,
         "mnli": 3,
+        "fever": 3,
         "mrpc": 2,
     }
 
@@ -451,8 +512,8 @@ def main():
 
     # Prepare model
     model = BertForSequenceClassification.from_pretrained(args.bert_model,
-              cache_dir=PYTORCH_PRETRAINED_BERT_CACHE / 'distributed_{}'.format(args.local_rank),
-              num_labels = num_labels)
+          cache_dir=PYTORCH_PRETRAINED_BERT_CACHE / 'distributed_{}'.format(args.local_rank),
+          num_labels = num_labels)
     if args.fp16:
         model.half()
     model.to(device)
@@ -512,21 +573,27 @@ def main():
         all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
         all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
         all_label_ids = torch.tensor([f.label_id for f in train_features], dtype=torch.long)
-        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        if args.weighted_loss:
+            all_weights = torch.tensor([f.weight for f in train_features], dtype=torch.float)
+        else:
+            all_weights = torch.tensor([0.0 for f in train_features], dtype=torch.float)
+        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_weights)
         if args.local_rank == -1:
             train_sampler = RandomSampler(train_data)
         else:
             train_sampler = DistributedSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
+
         model.train()
-        for _ in trange(int(args.num_train_epochs), desc="Epoch"):
-            tr_loss = 0
+        for ep in trange(int(args.num_train_epochs), desc="Epoch"):
+            tr_loss, tr_accuracy = 0, 0
             nb_tr_examples, nb_tr_steps = 0, 0
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                 batch = tuple(t.to(device) for t in batch)
-                input_ids, input_mask, segment_ids, label_ids = batch
-                loss = model(input_ids, segment_ids, input_mask, label_ids)
+                input_ids, input_mask, segment_ids, label_ids, weights = batch
+                loss, logits = model(input_ids, segment_ids, input_mask, label_ids, weights)
+                #loss = model(input_ids, segment_ids, input_mask, label_ids)
                 if n_gpu > 1:
                     loss = loss.mean() # mean() to average on multi-gpu.
                 if args.gradient_accumulation_steps > 1:
@@ -548,6 +615,33 @@ def main():
                     optimizer.step()
                     optimizer.zero_grad()
                     global_step += 1
+
+                #if ep == int(args.num_train_epochs) - 1:
+                if True:
+                    #logits = logits.detach().cpu().numpy()
+                    label_ids = label_ids.to('cpu').numpy()
+                    #tmp_train_accuracy = accuracy(logits, label_ids)
+
+                    #tr_accuracy += tmp_train_accuracy
+
+
+            tr_accuracy = tr_accuracy / nb_tr_examples
+            loss = tr_loss/nb_tr_steps if args.do_train else None
+            tr_result = {'loss': loss,
+                  'accuracy': 0.0,#tr_accuracy,
+                  'global_step': global_step}
+
+            logger.info("***** Train results *****")
+            for key in sorted(tr_result.keys()):
+                logger.info("  %s = %s", key, str(tr_result[key]))
+
+        output_tr_file = os.path.join(args.output_dir, "train_results.txt")
+        with open(output_tr_file, "w") as writer:
+            logger.info("***** Train results *****")
+            for key in sorted(tr_result.keys()):
+                logger.info("  %s = %s", key, str(tr_result[key]))
+                writer.write("%s = %s\n" % (key, str(tr_result[key])))
+
 
     # Save a trained model
     model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
@@ -579,6 +673,10 @@ def main():
         model.eval()
         eval_loss, eval_accuracy = 0, 0
         nb_eval_steps, nb_eval_examples = 0, 0
+
+        if args.output_preds:
+            all_preds = []
+            all_probs = []
  
         for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluating"):
             input_ids = input_ids.to(device)
@@ -587,8 +685,8 @@ def main():
             label_ids = label_ids.to(device)
 
             with torch.no_grad():
-                tmp_eval_loss = model(input_ids, segment_ids, input_mask, label_ids)
-                logits = model(input_ids, segment_ids, input_mask)
+                tmp_eval_loss, logits = model(input_ids, segment_ids, input_mask, label_ids)
+                #logits = model(input_ids, segment_ids, input_mask)
 
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.to('cpu').numpy()
@@ -599,6 +697,17 @@ def main():
 
             nb_eval_examples += input_ids.size(0)
             nb_eval_steps += 1
+
+            if args.output_preds:
+                pred_ids = logits.argmax(-1)
+                preds = [label_list[i] for i in pred_ids]
+                all_preds.extend(preds)
+                probs = list(logits)
+                for prob in probs:
+                    dict = {}
+                    for x,y in zip(label_list,prob):
+                        dict[x] = y
+                    all_probs.append(dict)
 
         eval_loss = eval_loss / nb_eval_steps
         eval_accuracy = eval_accuracy / nb_eval_examples
@@ -614,6 +723,26 @@ def main():
             for key in sorted(result.keys()):
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
+
+        if args.output_preds:
+            output_pred_file = os.path.join(args.output_dir, "preds.jsonl")
+            out_file = jsonlines.Writer(open(output_pred_file, "w"))
+            for i, pred in enumerate(all_preds):
+                example = eval_examples[i]
+                correct = pred == example.label
+                prob = all_probs[i]
+                out_dict = {"correct": correct,
+                            "pred_label": pred,
+                            "gold_label": example.label,
+                            "text_a": example.text_a,
+                            "text_b": example.text_b,
+                            "id": example.guid,
+                            }
+                for x,y in prob.items():
+                    out_dict[x] = str(y)
+                out_file.write(out_dict)
+
+            out_file.close()
 
 if __name__ == "__main__":
     main()

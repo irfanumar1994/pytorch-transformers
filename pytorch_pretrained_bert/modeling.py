@@ -59,6 +59,12 @@ def gelu(x):
 def swish(x):
     return x * torch.sigmoid(x)
 
+def get_weighted_loss(loss_fct, inputs, labels, weights):
+    loss = 0.0
+    for i in range(weights.shape[0]):
+        loss += (weights[i] + 1.0) * loss_fct(inputs[i:i + 1], labels[i:i + 1])
+
+    return loss / (sum(weights) + weights.shape[0])
 
 ACT2FN = {"gelu": gelu, "relu": torch.nn.functional.relu, "swish": swish}
 
@@ -883,15 +889,19 @@ class BertForSequenceClassification(PreTrainedBertModel):
         self.classifier = nn.Linear(config.hidden_size, num_labels)
         self.apply(self.init_bert_weights)
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None):
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None, weights=None):
         _, pooled_output = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
 
         if labels is not None:
             loss_fct = CrossEntropyLoss()
-            loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-            return loss
+            if weights is None:
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            else:
+                loss = get_weighted_loss(loss_fct, logits.view(-1, self.num_labels),
+                        labels.view(-1), weights)
+            return loss, logits
         else:
             return logits
 
