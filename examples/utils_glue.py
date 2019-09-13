@@ -21,6 +21,7 @@ import csv
 import logging
 import os
 import sys
+import jsonlines
 from io import open
 
 from scipy.stats import pearsonr, spearmanr
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 class InputExample(object):
     """A single training/test example for simple sequence classification."""
 
-    def __init__(self, guid, text_a, text_b=None, label=None):
+    def __init__(self, guid, text_a, text_b=None, label=None, weight=None):
         """Constructs a InputExample.
 
         Args:
@@ -43,21 +44,24 @@ class InputExample(object):
             Only must be specified for sequence pair tasks.
             label: (Optional) string. The label of the example. This should be
             specified for train and dev examples, but not for test examples.
+            weight: (Optional) float. The weight of the example for weighted loss.
         """
         self.guid = guid
         self.text_a = text_a
         self.text_b = text_b
         self.label = label
+        self.weight = weight
 
 
 class InputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, input_ids, input_mask, segment_ids, label_id):
+    def __init__(self, input_ids, input_mask, segment_ids, label_id, weight):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label_id = label_id
+        self.weight = weight
 
 
 class DataProcessor(object):
@@ -387,6 +391,50 @@ class WnliProcessor(DataProcessor):
                 InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples
 
+class FeverProcessor(DataProcessor):
+
+    def _read_jsonlines(self, input_file):
+        lines = []
+        with open(input_file, "r", encoding='utf-8') as f:
+            reader = jsonlines.Reader(f)
+            for line in reader.iter(type=dict):
+                lines.append(line)
+
+        return lines
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_jsonlines(os.path.join(data_dir, "fever.train.jsonl")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_jsonlines(os.path.join(data_dir, "fever.dev.jsonl")), "dev")
+
+    def get_labels(self):
+        """See base class."""
+        return ["SUPPORTS", "REFUTES", "NOT ENOUGH INFO"]
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        target_labels = self.get_labels()
+        num_labels = len(target_labels)
+        for (i, line) in enumerate(lines):
+            guid = line['id']
+            text_a = line['claim']
+            text_b = line['evidence']
+            label = line['gold_label']
+            if 'weight' in line:
+                weight = line['weight']
+            else:
+                weight = 0.0
+
+            examples.append(
+                InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label, weight=weight))
+        return examples
+
 
 def convert_examples_to_features(examples, label_list, max_seq_length,
                                  tokenizer, output_mode,
@@ -508,7 +556,8 @@ def convert_examples_to_features(examples, label_list, max_seq_length,
                 InputFeatures(input_ids=input_ids,
                               input_mask=input_mask,
                               segment_ids=segment_ids,
-                              label_id=label_id))
+                              label_id=label_id,
+                              weight=example.weight))
     return features
 
 
@@ -575,6 +624,8 @@ def compute_metrics(task_name, preds, labels):
         return {"acc": simple_accuracy(preds, labels)}
     elif task_name == "wnli":
         return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "fever":
+        return {"acc": simple_accuracy(preds, labels)}
     else:
         raise KeyError(task_name)
 
@@ -589,6 +640,7 @@ processors = {
     "qnli": QnliProcessor,
     "rte": RteProcessor,
     "wnli": WnliProcessor,
+    "fever": FeverProcessor,
 }
 
 output_modes = {
@@ -602,6 +654,7 @@ output_modes = {
     "qnli": "classification",
     "rte": "classification",
     "wnli": "classification",
+    "fever": "classification",
 }
 
 GLUE_TASKS_NUM_LABELS = {
@@ -614,4 +667,5 @@ GLUE_TASKS_NUM_LABELS = {
     "qnli": 2,
     "rte": 2,
     "wnli": 2,
+    "fever": 3,
 }

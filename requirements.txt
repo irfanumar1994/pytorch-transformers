@@ -12,3 +12,5 @@ regex
 sentencepiece
 # For XLM
 sacremoses
+# For FEVER
+jsonlines

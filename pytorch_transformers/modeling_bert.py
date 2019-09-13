@@ -129,6 +129,12 @@ def gelu(x):
 def swish(x):
     return x * torch.sigmoid(x)
 
+def get_weighted_loss(loss_fct, inputs, labels, weights):
+    loss = 0.0
+    for i in range(weights.shape[0]):
+        loss += (weights[i] + 1.0) * loss_fct(inputs[i:i + 1], labels[i:i + 1])
+
+    return loss / (sum(weights) + weights.shape[0])
 
 ACT2FN = {"gelu": gelu, "relu": torch.nn.functional.relu, "swish": swish}
 
@@ -480,7 +486,7 @@ BERT_START_DOCSTRING = r"""    The BERT model was proposed in
         https://pytorch.org/docs/stable/nn.html#module
 
     Parameters:
-        config (:class:`~pytorch_transformers.BertConfig`): Model configuration class with all the parameters of the model. 
+        config (:class:`~pytorch_transformers.BertConfig`): Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the weights associated with the model, only the configuration.
             Check out the :meth:`~pytorch_transformers.PreTrainedModel.from_pretrained` method to load the model weights.
 """
@@ -494,13 +500,13 @@ BERT_INPUTS_DOCSTRING = r"""
             (a) For sequence pairs:
 
                 ``tokens:         [CLS] is this jack ##son ##ville ? [SEP] no it is not . [SEP]``
-                
+
                 ``token_type_ids:   0   0  0    0    0     0       0   0   1  1  1  1   1   1``
 
             (b) For single sequences:
 
                 ``tokens:         [CLS] the dog is hairy . [SEP]``
-                
+
                 ``token_type_ids:   0   0   0   0  0     0   0``
 
             Bert is a model with absolute position embeddings so it's usually advised to pad the inputs on
@@ -690,7 +696,7 @@ class BertForPreTraining(BertPreTrainedModel):
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
-                            position_ids=position_ids, 
+                            position_ids=position_ids,
                             head_mask=head_mask)
 
         sequence_output, pooled_output = outputs[:2]
@@ -762,7 +768,7 @@ class BertForMaskedLM(BertPreTrainedModel):
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
-                            position_ids=position_ids, 
+                            position_ids=position_ids,
                             head_mask=head_mask)
 
         sequence_output = outputs[0]
@@ -823,7 +829,7 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
-                            position_ids=position_ids, 
+                            position_ids=position_ids,
                             head_mask=head_mask)
 
         pooled_output = outputs[1]
@@ -884,12 +890,12 @@ class BertForSequenceClassification(BertPreTrainedModel):
         self.init_weights()
 
     def forward(self, input_ids, attention_mask=None, token_type_ids=None,
-                position_ids=None, head_mask=None, labels=None):
+                position_ids=None, head_mask=None, labels=None, weights=None):
 
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
-                            position_ids=position_ids, 
+                            position_ids=position_ids,
                             head_mask=head_mask)
 
         pooled_output = outputs[1]
@@ -906,7 +912,12 @@ class BertForSequenceClassification(BertPreTrainedModel):
                 loss = loss_fct(logits.view(-1), labels.view(-1))
             else:
                 loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                if weights is None:
+                    loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                else:
+                    loss = get_weighted_loss(loss_fct,
+                                             logits.view(-1, self.num_labels),
+                                             labels.view(-1), weights)
             outputs = (loss,) + outputs
 
         return outputs  # (loss), logits, (hidden_states), (attentions)
@@ -1035,7 +1046,7 @@ class BertForTokenClassification(BertPreTrainedModel):
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
-                            position_ids=position_ids, 
+                            position_ids=position_ids,
                             head_mask=head_mask)
 
         sequence_output = outputs[0]
@@ -1114,7 +1125,7 @@ class BertForQuestionAnswering(BertPreTrainedModel):
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
-                            position_ids=position_ids, 
+                            position_ids=position_ids,
                             head_mask=head_mask)
 
         sequence_output = outputs[0]
