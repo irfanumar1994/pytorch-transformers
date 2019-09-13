@@ -1,3 +1,7 @@
+# What is this?
+This is a fork of the PyTorch-Transformers repo for the FEVER symmetric dataset processor and weighted loss.
+For more details, see the [FeverSymmetric](https://github.com/TalSchuster/FeverSymmetric) repository.
+
 # 👾 PyTorch-Transformers
 
 [![CircleCI](https://circleci.com/gh/huggingface/pytorch-transformers.svg?style=svg)](https://circleci.com/gh/huggingface/pytorch-transformers)
