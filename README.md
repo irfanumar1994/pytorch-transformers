@@ -22,3 +22,18 @@ python examples/run_glue.py \
 ```
 
 to use the per sample weights, use the `--weighted_loss` flag.
+
+## Testing
+
+```
+python examples/run_glue.py \
+  --task_name fever \
+  --do_eval \
+  --output_preds \
+  --do_lower_case \
+  --model_type bert \
+  --data_dir PATH_TO_DATA_DIR \
+  --model_name_or_path bert-base-uncased \
+  --max_seq_length 128 \
+  --output_dir output/baseline
+```

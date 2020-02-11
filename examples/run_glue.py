@@ -201,7 +201,8 @@ def evaluate(args, model, tokenizer, prefix=""):
 
         args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
         # Note that DistributedSampler samples randomly
-        eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
+        #eval_sampler = SequentialSampler(eval_dataset) if args.local_rank == -1 else DistributedSampler(eval_dataset)
+        eval_sampler = SequentialSampler(eval_dataset)
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
         # Eval!
@@ -247,6 +248,10 @@ def evaluate(args, model, tokenizer, prefix=""):
             for key in sorted(result.keys()):
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
+
+        if args.output_preds:
+            output_pred_file = os.path.join(eval_output_dir, "preds.npy")
+            np.save(output_pred_file, preds)
 
     return results
 
@@ -322,6 +327,9 @@ def main():
                         help="The name of the task to train selected in the list: " + ", ".join(processors.keys()))
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
+    parser.add_argument('--output_preds',
+                        action='store_true',
+                        help="output the predictions of the dev set")
 
     ## Other parameters
     parser.add_argument("--config_name", default="", type=str,
