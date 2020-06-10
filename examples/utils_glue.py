@@ -391,6 +391,7 @@ class WnliProcessor(DataProcessor):
                 InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples
 
+
 class FeverProcessor(DataProcessor):
 
     def _read_jsonlines(self, input_file):
@@ -425,7 +426,10 @@ class FeverProcessor(DataProcessor):
             guid = line['id']
             text_a = line['claim']
             text_b = line['evidence']
-            label = line['gold_label']
+            if 'gold_label' in line:
+                label = line['gold_label']
+            else:
+                label = line['label']
             if 'weight' in line:
                 weight = line['weight']
             else:
@@ -434,6 +438,54 @@ class FeverProcessor(DataProcessor):
             examples.append(
                 InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label, weight=weight))
         return examples
+
+
+class FeverClaimOnlyProcessor(DataProcessor):
+
+    def _read_jsonlines(self, input_file):
+        lines = []
+        with open(input_file, "r", encoding='utf-8') as f:
+            reader = jsonlines.Reader(f)
+            for line in reader.iter(type=dict):
+                lines.append(line)
+
+        return lines
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_jsonlines(os.path.join(data_dir, "fever.train.jsonl")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_jsonlines(os.path.join(data_dir, "shared_task_dev.jsonl")), "dev")
+
+    def get_labels(self):
+        """See base class."""
+        return ["SUPPORTS", "REFUTES", "NOT ENOUGH INFO"]
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        target_labels = self.get_labels()
+        num_labels = len(target_labels)
+        for (i, line) in enumerate(lines):
+            guid = line['id']
+            text_a = line['claim']
+            if 'gold_label' in line:
+                label = line['gold_label']
+            else:
+                label = line['label']
+            if 'weight' in line:
+                weight = line['weight']
+            else:
+                weight = 0.0
+
+            examples.append(
+                InputExample(guid=guid, text_a=text_a, text_b=None, label=label, weight=weight))
+        return examples
+
 
 
 def convert_examples_to_features(examples, label_list, max_seq_length,
@@ -626,6 +678,8 @@ def compute_metrics(task_name, preds, labels):
         return {"acc": simple_accuracy(preds, labels)}
     elif task_name == "fever":
         return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "fever-claimonly":
+        return {"acc": simple_accuracy(preds, labels)}
     else:
         raise KeyError(task_name)
 
@@ -641,6 +695,7 @@ processors = {
     "rte": RteProcessor,
     "wnli": WnliProcessor,
     "fever": FeverProcessor,
+    "fever-claimonly": FeverClaimOnlyProcessor,
 }
 
 output_modes = {
@@ -655,6 +710,7 @@ output_modes = {
     "rte": "classification",
     "wnli": "classification",
     "fever": "classification",
+    "fever-claimonly": "classification",
 }
 
 GLUE_TASKS_NUM_LABELS = {
@@ -668,4 +724,5 @@ GLUE_TASKS_NUM_LABELS = {
     "rte": 2,
     "wnli": 2,
     "fever": 3,
+    "fever-claimonly": 3,
 }
