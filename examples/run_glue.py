@@ -306,8 +306,10 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
 
     if args.weighted_loss:
         all_weights = torch.tensor([f.weight for f in features], dtype=torch.float)
+        print("--Testing--run_glue.py-- if args.wheighted_loss is true")
     else:
         all_weights = torch.tensor([0.0 for f in features], dtype=torch.float)
+        print("--Testing--run_glue.py-- if args.wheighted_loss is false")
 
     dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_weights)
     return dataset
